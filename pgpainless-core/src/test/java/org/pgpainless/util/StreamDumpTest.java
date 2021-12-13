@@ -15,6 +15,25 @@ public class StreamDumpTest {
 
     @Test
     public void test() throws IOException, PGPException {
+
+        String secretKey = "-----BEGIN PGP PRIVATE KEY BLOCK-----\n" +
+                "\n" +
+                "lFgEWx6DORYJKwYBBAHaRw8BAQdABJa6xH6/nQoBQtVuqaenNLrKvkJ5gniGtBH3\n" +
+                "tsK+ckkAAP9uxXBqYoH/Kh+rjNMKRO6pgdkoYTYvMh5TVcQHR6LzoA+ttCxFbW1l\n" +
+                "bGllIERvcm90aGVhIERpbmEgU2FtYW50aGEgQXdpbmEgRWQyNTUxOYiQBBMWCAA4\n" +
+                "FiEEjowz+kYmM3l22Xl4BpwMNI3YLBkFAlsegzkCGwMFCwkIBwIGFQoJCAsCBBYC\n" +
+                "AwECHgECF4AACgkQBpwMNI3YLBlo5wD7B2CyTh/hEQOaZV56TqRpabY+zpCs2cTX\n" +
+                "7IjZnkEi5OAA/0WxAICvyJBkKIittgbnyQXml1UysgZ/Vv0dzNb+UgsPnFgEW4PY\n" +
+                "rxYJKwYBBAHaRw8BAQdA0LwoloQu+RTjYydL+2Qp/dmmY13fFUG72tEw3JTsJr8A\n" +
+                "AQCGQqw6/M3duPYNiNxo3D1w2XW1j1IJPm3+Zxb1bxDCHhDMiO8EGBYIACAWIQSO\n" +
+                "jDP6RiYzeXbZeXgGnAw0jdgsGQUCW4PYrwIbAgCBCRAGnAw0jdgsGXYgBBkWCAAd\n" +
+                "FiEEBhw8pEr/DsWNxm6VIuP6/pa1bDIFAluD2K8ACgkQIuP6/pa1bDJoTQD/cYH2\n" +
+                "EFRBljjnT6DiPJYEJRoz5IAXgnKaOntXPA/9uCYBAN8po38vE9auBLpOM8QKNVIS\n" +
+                "CGG3Y2bOe2BIQ8K25bkKJ4ABAN1KMV+Lb5Bdgh1xMvjGILyT+aVH3dIppj/mBlnH\n" +
+                "O3mrAP9RgDT1iuvJlwIaML8Hq/uaG1Ryd9rwfAt0tfqj0dY1Cw==\n" +
+                "=HYsE\n" +
+                "-----END PGP PRIVATE KEY BLOCK-----\n";
+
         String encryptedMessage = "-----BEGIN PGP MESSAGE-----\n" +
                 "\n" +
                 "wV4Di9iOlMDSAzMSAQdAu/2VmD0uZASFHqAD0IVNq7C8rdsJ+ZQd2nQsuBilygUw\n" +
@@ -50,7 +69,7 @@ public class StreamDumpTest {
                 "=56Gw\n" +
                 "-----END PGP MESSAGE-----";
 
-        ArmoredInputStream inputStream = new ArmoredInputStream(new ByteArrayInputStream(encryptedMessage.getBytes(StandardCharsets.UTF_8)));
+        ArmoredInputStream inputStream = new ArmoredInputStream(new ByteArrayInputStream(secretKey.getBytes(StandardCharsets.UTF_8)));
 
         StreamDumper.dump(inputStream, sessionKey);
     }

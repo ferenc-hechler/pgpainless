@@ -31,11 +31,16 @@ import org.bouncycastle.openpgp.PGPEncryptedData;
 import org.bouncycastle.openpgp.PGPEncryptedDataList;
 import org.bouncycastle.openpgp.PGPException;
 import org.bouncycastle.openpgp.PGPLiteralData;
+import org.bouncycastle.openpgp.PGPMarker;
 import org.bouncycastle.openpgp.PGPObjectFactory;
 import org.bouncycastle.openpgp.PGPOnePassSignature;
 import org.bouncycastle.openpgp.PGPOnePassSignatureList;
 import org.bouncycastle.openpgp.PGPPBEEncryptedData;
+import org.bouncycastle.openpgp.PGPPublicKey;
 import org.bouncycastle.openpgp.PGPPublicKeyEncryptedData;
+import org.bouncycastle.openpgp.PGPPublicKeyRing;
+import org.bouncycastle.openpgp.PGPSecretKey;
+import org.bouncycastle.openpgp.PGPSecretKeyRing;
 import org.bouncycastle.openpgp.PGPSessionKey;
 import org.bouncycastle.openpgp.PGPSignature;
 import org.bouncycastle.openpgp.PGPSignatureList;
@@ -54,6 +59,7 @@ import org.pgpainless.algorithm.SignatureType;
 import org.pgpainless.algorithm.StreamEncoding;
 import org.pgpainless.algorithm.SymmetricKeyAlgorithm;
 import org.pgpainless.key.util.RevocationAttributes;
+import org.pgpainless.signature.subpackets.KeyServerPreferences;
 
 public class StreamDumper {
 
@@ -87,6 +93,7 @@ public class StreamDumper {
                             .emptyLine();
                 }
             }
+
             else if (next instanceof PGPSignatureList) {
                 PGPSignatureList signatures = (PGPSignatureList) next;
                 for (PGPSignature signature : signatures) {
@@ -94,6 +101,7 @@ public class StreamDumper {
                     sbw.emptyLine();
                 }
             }
+
             else if (next instanceof PGPEncryptedDataList) {
                 PGPEncryptedDataList encryptedDataList = (PGPEncryptedDataList) next;
                 SessionKeyDataDecryptorFactory sessionKeyDataDecryptorFactory = null;
@@ -135,6 +143,7 @@ public class StreamDumper {
                 }
                 sbw.emptyLine();
             }
+
             else if (next instanceof PGPLiteralData) {
                 PGPLiteralData literalData = (PGPLiteralData) next;
                 StreamEncoding encoding = StreamEncoding.fromCode(literalData.getFormat());
@@ -164,6 +173,7 @@ public class StreamDumper {
                         .dind()
                         .emptyLine();
             }
+
             else if (next instanceof PGPCompressedData) {
                 PGPCompressedData compressedData = (PGPCompressedData) next;
                 sbw.appendLine("Compressed Data Packet").iind()
@@ -173,6 +183,66 @@ public class StreamDumper {
                 PGPObjectFactory compressedFactory = new BcPGPObjectFactory(compressedData.getDataStream());
                 walkObjects(sbw, compressedFactory, sessionKey);
                 sbw.dind();
+            }
+
+            else if (next instanceof PGPMarker) {
+                sbw.appendLine("Marker Packet")
+                        .emptyLine();
+            }
+
+            else if (next instanceof PGPSecretKeyRing) {
+                PGPSecretKeyRing secretKeys = (PGPSecretKeyRing) next;
+
+                for (PGPSecretKey secretKey : secretKeys) {
+                    PGPPublicKey publicKey = secretKey.getPublicKey();
+                    sbw.appendLine(publicKey.isMasterKey() ? "Secret-Key Packet" : "Secret-Subkey Packet").iind()
+                            .appendLine("Version: " + publicKey.getVersion())
+                            .appendLine("Creation Time: " + DateUtil.formatUTCDate(publicKey.getCreationTime()))
+                            .appendLine("Public Key Algorithm: " + PublicKeyAlgorithm.fromId(publicKey.getAlgorithm()))
+                            .appendLine("Public Key Size: " + publicKey.getBitStrength())
+                            .appendLine("Fingerprint: " + Hex.toHexString(publicKey.getFingerprint()))
+                            .appendLine("Key-ID: " + Long.toHexString(publicKey.getKeyID()))
+                            .dind().emptyLine();
+
+                    for (Iterator<PGPSignature> iter = publicKey.getKeySignatures(); iter.hasNext(); ) {
+                        PGPSignature signature = iter.next();
+                        appendSignature(sbw, signature);
+                    }
+
+                    for (Iterator<String> it = publicKey.getUserIDs(); it.hasNext(); ) {
+                        String userId = it.next();
+                        sbw.appendLine("User-ID Packet").iind()
+                                .appendLine("Value: " + userId)
+                                .dind().emptyLine();
+
+                        for (Iterator<PGPSignature> iter = publicKey.getSignaturesForID(userId); iter.hasNext(); ) {
+                            PGPSignature signature = iter.next();
+                            appendSignature(sbw, signature);
+                            sbw.emptyLine();
+                        }
+                    }
+
+                }
+
+                for (Iterator<PGPPublicKey> it = secretKeys.getExtraPublicKeys(); it.hasNext(); ) {
+                    PGPPublicKey publicKey = it.next();
+                    sbw.appendLine("Public-Key Packet").iind()
+                            .appendLine("Version: " + publicKey.getVersion())
+                            .appendLine("Creation Time: " + DateUtil.formatUTCDate(publicKey.getCreationTime()))
+                            .appendLine("Public Key Algorithm: " + PublicKeyAlgorithm.fromId(publicKey.getAlgorithm()))
+                            .appendLine("Public Key Size: " + publicKey.getBitStrength())
+                            .appendLine("Fingerprint: " + Hex.toHexString(publicKey.getFingerprint()))
+                            .appendLine("Key-ID: " + Long.toHexString(publicKey.getKeyID()))
+                            .dind().emptyLine();
+                }
+            }
+
+            else if (next instanceof PGPPublicKeyRing) {
+
+            }
+
+            else if (next instanceof PGPPublicKey) {
+
             }
             /*
 
@@ -311,7 +381,8 @@ public class StreamDumper {
                     sbw.appendLine("Preferred Compression Algorithms: " + Arrays.toString(compAlgs) + (preferredCompressionAlgorithms.isCritical() ? " (critical)" : ""));
                     break;
                 case keyServerPreferences:
-                    sbw.appendLine("Key Server Preferences: " + new String(subpacket.getData()));
+                    KeyServerPreferences preferences = new KeyServerPreferences(subpacket);
+                    sbw.appendLine("Key Server Preferences: " + Arrays.toString(preferences.getPreferences().toArray(new KeyServerPreferences.Pref[0])));
                     break;
                 case preferredKeyServers:
                     sbw.appendLine("Preferred Key Servers: " + new String(subpacket.getData()));
@@ -381,9 +452,10 @@ public class StreamDumper {
     }
 
     public static class StringBuilderWrapper {
+        private final int spacesPerLevel = 2;
+
         private final StringBuilder sb;
         private int indentationLevel = 0;
-        private final int spacesPerLevel = 2;
 
         public StringBuilderWrapper(StringBuilder sb) {
             this.sb = sb;
