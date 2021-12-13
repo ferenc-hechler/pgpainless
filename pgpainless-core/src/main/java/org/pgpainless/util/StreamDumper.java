@@ -1,11 +1,19 @@
+// SPDX-FileCopyrightText: 2021 Paul Schaub <vanitasvitae@fsfe.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package org.pgpainless.util;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.PrintWriter;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.Iterator;
+import java.util.List;
 
+import org.bouncycastle.bcpg.Packet;
 import org.bouncycastle.bcpg.SignatureSubpacket;
 import org.bouncycastle.bcpg.sig.EmbeddedSignature;
 import org.bouncycastle.bcpg.sig.Exportable;
@@ -63,18 +71,30 @@ import org.pgpainless.signature.subpackets.KeyServerPreferences;
 
 public class StreamDumper {
 
-    public static void dump(InputStream inputStream, PGPSessionKey sessionKey) throws IOException, PGPException {
+    public static void main(String[] args) throws PGPException, IOException {
+        if (args.length == 0) {
+            dump(System.in, null, System.out);
+        } else if (args.length == 1) {
+            PGPSessionKey sessionKey = PGPSessionKey.fromAsciiRepresentation(args[0]);
+            dump(System.in, sessionKey, System.out);
+        } else {
+            // CHECKSTYLE:OFF
+            System.err.println("Usage: StreamDumper [session-key]");
+            // CHECKSTYLE:ON
+        }
 
-        StringBuilder stringBuilder = new StringBuilder();
-        StringBuilderWrapper sbw = new StringBuilderWrapper(stringBuilder);
-
-        PGPObjectFactory objectFactory = new BcPGPObjectFactory(inputStream);
-        walkObjects(sbw, objectFactory, sessionKey);
-
-        System.out.println(sbw);
     }
 
-    private static void walkObjects(StringBuilderWrapper sbw, PGPObjectFactory objectFactory, PGPSessionKey sessionKey) throws IOException, PGPException {
+    public static void dump(InputStream inputStream, PGPSessionKey sessionKey, OutputStream outputStream) throws IOException, PGPException {
+        PrintWriter printWriter = new PrintWriter(outputStream);
+        PrintWriterWrapper pww = new PrintWriterWrapper(printWriter);
+
+        PGPObjectFactory objectFactory = new BcPGPObjectFactory(inputStream);
+        walkObjects(pww, objectFactory, sessionKey);
+        printWriter.flush();
+    }
+
+    private static void walkObjects(PrintWriterWrapper pww, PGPObjectFactory objectFactory, PGPSessionKey sessionKey) throws IOException, PGPException {
         Object next;
 
         while ((next = objectFactory.nextObject()) != null) {
@@ -84,7 +104,7 @@ public class StreamDumper {
                 Iterator<PGPOnePassSignature> iterator = onePassSignatures.iterator();
                 while (iterator.hasNext()) {
                     PGPOnePassSignature pgpOnePassSignature = iterator.next();
-                    sbw.appendLine("One-Pass Signature Packet").iind()
+                    pww.appendLine("One-Pass Signature Packet").iind()
                             .appendLine("Type: " + SignatureType.valueOf(pgpOnePassSignature.getSignatureType()))
                             .appendLine("Public Key Algorithm: " + PublicKeyAlgorithm.fromId(pgpOnePassSignature.getKeyAlgorithm()))
                             .appendLine("Hash Algorithm: " + HashAlgorithm.fromId(pgpOnePassSignature.getHashAlgorithm()))
@@ -97,8 +117,8 @@ public class StreamDumper {
             else if (next instanceof PGPSignatureList) {
                 PGPSignatureList signatures = (PGPSignatureList) next;
                 for (PGPSignature signature : signatures) {
-                    appendSignature(sbw, signature);
-                    sbw.emptyLine();
+                    appendSignature(pww, signature);
+                    pww.emptyLine();
                 }
             }
 
@@ -109,39 +129,79 @@ public class StreamDumper {
                     sessionKeyDataDecryptorFactory = new BcSessionKeyDataDecryptorFactory(sessionKey);
                 }
                 for (PGPEncryptedData encryptedData : encryptedDataList) {
+
+                    boolean decrypted = false;
                     if (encryptedData instanceof PGPPublicKeyEncryptedData) {
                         PGPPublicKeyEncryptedData pkesk = (PGPPublicKeyEncryptedData) encryptedData;
-                        sbw.appendLine("Public-Key Encrypted Session Key Packet").iind()
+                        pww.appendLine("Public-Key Encrypted Session Key Packet").iind()
                                 .appendLine("Recipient: " + Long.toHexString(pkesk.getKeyID()));
 
                         if (sessionKeyDataDecryptorFactory != null) {
                             try {
                                 InputStream inputStream = pkesk.getDataStream(sessionKeyDataDecryptorFactory);
-                                sbw.appendLine("Session Key: " + Hex.toHexString(sessionKey.getKey()));
-                                sbw.appendLine("Symmetric Algorithm: " + SymmetricKeyAlgorithm.fromId(sessionKey.getAlgorithm()));
-                                sbw.appendLine("Decryption Successful");
-                                sbw.emptyLine();
+                                pww.appendLine("Session Key: " + Hex.toHexString(sessionKey.getKey()));
+                                pww.appendLine("Symmetric Algorithm: " + SymmetricKeyAlgorithm.fromId(sessionKey.getAlgorithm()));
+                                pww.appendLine("Decryption Successful");
+                                pww.emptyLine();
 
                                 PGPObjectFactory decryptedFactory = new BcPGPObjectFactory(inputStream);
-                                walkObjects(sbw, decryptedFactory, sessionKey);
-                            } catch (PGPException e) {
-                                sbw.appendLine("Decryption Failed");
+                                walkObjects(pww, decryptedFactory, sessionKey);
+                                decrypted = true;
+                            } catch (PGPException | IOException e) {
+                                pww.appendLine("Decryption Failed")
+                                        .emptyLine();
                             }
+                        } else {
+                            pww.appendLine("No Decryption Method")
+                                    .emptyLine();
                         }
 
                         if (pkesk.isIntegrityProtected()) {
-                            sbw.appendLine("Modification Detection Code Packet").iind()
-                                    .appendLine("Valid: " + pkesk.verify())
-                                    .dind();
+                            pww.appendLine("Modification Detection Code Packet").iind();
+                            if (decrypted) {
+                                pww.appendLine("Valid: " + pkesk.verify());
+                            }
                         }
-                    } else if (encryptedData instanceof PGPPBEEncryptedData) {
+                        pww.dind();
+                    }
+
+                    else if (encryptedData instanceof PGPPBEEncryptedData) {
                         PGPPBEEncryptedData skesk = (PGPPBEEncryptedData) encryptedData;
-                        sbw.appendLine("Symmetric-Key Encrypted Session Key Packet").iind()
+                        pww.appendLine("Symmetric-Key Encrypted Session Key Packet").iind()
                                 .appendLine("Integrity Protected: " + skesk.isIntegrityProtected())
                                 .dind().emptyLine();
+
+                        if (sessionKeyDataDecryptorFactory != null) {
+                            try {
+                                InputStream inputStream = skesk.getDataStream(sessionKeyDataDecryptorFactory);
+                                pww.appendLine("Session Key: " + Hex.toHexString(sessionKey.getKey()));
+                                pww.appendLine("Symmetric Algorithm: " + SymmetricKeyAlgorithm.fromId(sessionKey.getAlgorithm()));
+                                pww.appendLine("Decryption Successful");
+                                pww.emptyLine();
+
+                                PGPObjectFactory decryptedFactory = new BcPGPObjectFactory(inputStream);
+                                walkObjects(pww, decryptedFactory, sessionKey);
+                                decrypted = true;
+                            } catch (PGPException | IOException e) {
+                                pww.appendLine("Decryption Failed");
+                            }
+                        } else {
+                            pww.appendLine("No Decryption Method")
+                                    .emptyLine();
+                        }
+
+                        if (skesk.isIntegrityProtected()) {
+                            pww.appendLine("Modification Detection Code Packet").iind();
+                            if (decrypted) {
+                                pww.appendLine("Valid: " + skesk.verify());
+                            }
+                        }
+                        pww.dind();
                     }
+
+                    pww.dind().emptyLine();
                 }
-                sbw.emptyLine();
+                pww.emptyLine();
             }
 
             else if (next instanceof PGPLiteralData) {
@@ -150,13 +210,13 @@ public class StreamDumper {
                 String fileName = literalData.getFileName();
                 Date modificationDate = literalData.getModificationTime();
 
-                sbw.appendLine("Literal Data Packet").iind()
+                pww.appendLine("Literal Data Packet").iind()
                         .appendLine("Format: " + encoding);
                 if (fileName != null && !fileName.isEmpty()) {
-                    sbw.appendLine("File Name: " + fileName);
+                    pww.appendLine("File Name: " + fileName);
                 }
                 if (modificationDate != null && modificationDate.getTime() != 0) {
-                    sbw.appendLine("Modification Date: " + DateUtil.formatUTCDate(modificationDate));
+                    pww.appendLine("Modification Date: " + DateUtil.formatUTCDate(modificationDate));
                 }
 
                 byte[] peek = new byte[512];
@@ -169,24 +229,24 @@ public class StreamDumper {
                 if (read != -1) {
                     content = new String(peek, 0, read).replace("\r", "\\r").replace("\n", "\\n");
                 }
-                sbw.appendLine("Content: \"" + content + "\"")
+                pww.appendLine("Content: \"" + content + "\"")
                         .dind()
                         .emptyLine();
             }
 
             else if (next instanceof PGPCompressedData) {
                 PGPCompressedData compressedData = (PGPCompressedData) next;
-                sbw.appendLine("Compressed Data Packet").iind()
+                pww.appendLine("Compressed Data Packet").iind()
                         .appendLine("Algorithm: " + CompressionAlgorithm.fromId(compressedData.getAlgorithm()))
                         .emptyLine();
 
                 PGPObjectFactory compressedFactory = new BcPGPObjectFactory(compressedData.getDataStream());
-                walkObjects(sbw, compressedFactory, sessionKey);
-                sbw.dind();
+                walkObjects(pww, compressedFactory, sessionKey);
+                pww.dind();
             }
 
             else if (next instanceof PGPMarker) {
-                sbw.appendLine("Marker Packet")
+                pww.appendLine("Marker Packet")
                         .emptyLine();
             }
 
@@ -194,55 +254,29 @@ public class StreamDumper {
                 PGPSecretKeyRing secretKeys = (PGPSecretKeyRing) next;
 
                 for (PGPSecretKey secretKey : secretKeys) {
-                    PGPPublicKey publicKey = secretKey.getPublicKey();
-                    sbw.appendLine(publicKey.isMasterKey() ? "Secret-Key Packet" : "Secret-Subkey Packet").iind()
-                            .appendLine("Version: " + publicKey.getVersion())
-                            .appendLine("Creation Time: " + DateUtil.formatUTCDate(publicKey.getCreationTime()))
-                            .appendLine("Public Key Algorithm: " + PublicKeyAlgorithm.fromId(publicKey.getAlgorithm()))
-                            .appendLine("Public Key Size: " + publicKey.getBitStrength())
-                            .appendLine("Fingerprint: " + Hex.toHexString(publicKey.getFingerprint()))
-                            .appendLine("Key-ID: " + Long.toHexString(publicKey.getKeyID()))
-                            .dind().emptyLine();
-
-                    for (Iterator<PGPSignature> iter = publicKey.getKeySignatures(); iter.hasNext(); ) {
-                        PGPSignature signature = iter.next();
-                        appendSignature(sbw, signature);
-                    }
-
-                    for (Iterator<String> it = publicKey.getUserIDs(); it.hasNext(); ) {
-                        String userId = it.next();
-                        sbw.appendLine("User-ID Packet").iind()
-                                .appendLine("Value: " + userId)
-                                .dind().emptyLine();
-
-                        for (Iterator<PGPSignature> iter = publicKey.getSignaturesForID(userId); iter.hasNext(); ) {
-                            PGPSignature signature = iter.next();
-                            appendSignature(sbw, signature);
-                            sbw.emptyLine();
-                        }
-                    }
-
+                    appendSecretKey(pww, secretKey);
                 }
 
                 for (Iterator<PGPPublicKey> it = secretKeys.getExtraPublicKeys(); it.hasNext(); ) {
                     PGPPublicKey publicKey = it.next();
-                    sbw.appendLine("Public-Key Packet").iind()
-                            .appendLine("Version: " + publicKey.getVersion())
-                            .appendLine("Creation Time: " + DateUtil.formatUTCDate(publicKey.getCreationTime()))
-                            .appendLine("Public Key Algorithm: " + PublicKeyAlgorithm.fromId(publicKey.getAlgorithm()))
-                            .appendLine("Public Key Size: " + publicKey.getBitStrength())
-                            .appendLine("Fingerprint: " + Hex.toHexString(publicKey.getFingerprint()))
-                            .appendLine("Key-ID: " + Long.toHexString(publicKey.getKeyID()))
-                            .dind().emptyLine();
+                    appendPublicKey(pww, publicKey);
                 }
             }
 
             else if (next instanceof PGPPublicKeyRing) {
-
+                PGPPublicKeyRing publicKeys = (PGPPublicKeyRing) next;
+                for (PGPPublicKey publicKey : publicKeys) {
+                    appendPublicKey(pww, publicKey);
+                }
             }
 
             else if (next instanceof PGPPublicKey) {
+                appendPublicKey(pww, (PGPPublicKey) next);
+            }
 
+            else if (next instanceof Packet) {
+                Packet packet = (Packet) next;
+                pww.appendLine("Experimental Packet: " + packet.toString());
             }
             /*
 
@@ -270,32 +304,89 @@ public class StreamDumper {
         }
     }
 
-    private static void appendSignature(StringBuilderWrapper sbw, PGPSignature signature) throws PGPException {
-        sbw.appendLine("Signature Packet").iind()
+    private static void appendSecretKey(PrintWriterWrapper pww, PGPSecretKey secretKey) throws PGPException {
+        PGPPublicKey publicKey = secretKey.getPublicKey();
+        pww.appendLine(publicKey.isMasterKey() ? "Secret-Key Packet" : "Secret-Subkey Packet").iind()
+                .appendLine("Version: " + publicKey.getVersion())
+                .appendLine("Creation Time: " + DateUtil.formatUTCDate(publicKey.getCreationTime()))
+                .appendLine("Public Key Algorithm: " + PublicKeyAlgorithm.fromId(publicKey.getAlgorithm()))
+                .appendLine("Public Key Size: " + publicKey.getBitStrength())
+                .appendLine("Fingerprint: " + Hex.toHexString(publicKey.getFingerprint()))
+                .appendLine("Key-ID: " + Long.toHexString(publicKey.getKeyID()))
+                .dind().emptyLine();
+
+        appendPublicKeyAppendix(pww, publicKey);
+    }
+
+    private static void appendPublicKey(PrintWriterWrapper pww, PGPPublicKey publicKey) throws PGPException {
+        pww.appendLine(publicKey.isMasterKey() ? "Public-Key Packet" : "Public-Subkey Packet").iind()
+                .appendLine("Version: " + publicKey.getVersion())
+                .appendLine("Creation Time: " + DateUtil.formatUTCDate(publicKey.getCreationTime()))
+                .appendLine("Public Key Algorithm: " + PublicKeyAlgorithm.fromId(publicKey.getAlgorithm()))
+                .appendLine("Public Key Size: " + publicKey.getBitStrength())
+                .appendLine("Fingerprint: " + Hex.toHexString(publicKey.getFingerprint()))
+                .appendLine("Key-ID: " + Long.toHexString(publicKey.getKeyID()))
+                .dind().emptyLine();
+
+        appendPublicKeyAppendix(pww, publicKey);
+    }
+
+    private static void appendPublicKeyAppendix(PrintWriterWrapper pww, PGPPublicKey publicKey) throws PGPException {
+        List<PGPSignature> allSignatures = CollectionUtils.iteratorToList(publicKey.getSignatures());
+        List<PGPSignature> directKeySignatures = CollectionUtils.iteratorToList(publicKey.getSignaturesOfType(SignatureType.DIRECT_KEY.getCode()));
+
+        for (PGPSignature signature : directKeySignatures) {
+            allSignatures.remove(signature);
+            appendSignature(pww, signature);
+            pww.emptyLine();
+        }
+
+        for (Iterator<String> it = publicKey.getUserIDs(); it.hasNext(); ) {
+            String userId = it.next();
+            pww.appendLine("User-ID Packet").iind()
+                    .appendLine("Value: " + userId)
+                    .dind().emptyLine();
+
+            List<PGPSignature> userIdSigs = CollectionUtils.iteratorToList(publicKey.getSignaturesForID(userId));
+            for (PGPSignature signature :  userIdSigs) {
+                appendSignature(pww, signature);
+                allSignatures.remove(signature);
+                pww.emptyLine();
+            }
+        }
+
+        for (PGPSignature signature : allSignatures) {
+            appendSignature(pww, signature);
+            pww.emptyLine();
+        }
+    }
+
+    private static void appendSignature(PrintWriterWrapper pww, PGPSignature signature) throws PGPException {
+        pww.appendLine("Signature Packet").iind()
                 .appendLine("Version: " + signature.getVersion())
                 .appendLine("Type: " + SignatureType.valueOf(signature.getSignatureType()))
                 .appendLine("Public Key Algorithm: " + PublicKeyAlgorithm.fromId(signature.getKeyAlgorithm()))
                 .appendLine("Hash Algorithm: " + HashAlgorithm.fromId(signature.getHashAlgorithm()));
 
         if (signature.getHashedSubPackets().toArray().length != 0) {
-            sbw.appendLine("Hashed Area:").iind();
-            appendSubpacketVector(sbw, signature.getHashedSubPackets());
-            sbw.dind();
+            pww.appendLine("Hashed Area:").iind();
+            appendSubpacketVector(pww, signature.getHashedSubPackets());
+            pww.dind();
         }
 
         if (signature.getUnhashedSubPackets().toArray().length != 0) {
-            sbw.appendLine("Unhashed Area:").iind();
-            appendSubpacketVector(sbw, signature.getUnhashedSubPackets());
-            sbw.dind();
+            pww.appendLine("Unhashed Area:").iind();
+            appendSubpacketVector(pww, signature.getUnhashedSubPackets());
+            pww.dind();
         }
 
-        sbw.appendLine("Digest Prefix: " + Hex.toHexString(signature.getDigestPrefix()))
+        pww.appendLine("Digest Prefix: " + Hex.toHexString(signature.getDigestPrefix()))
                 .appendLine("Signature: ").iind()
                 .appendLine(Hex.toHexString(signature.getSignature())).dind()
                 .dind();
     }
 
-    private static void appendSubpacketVector(StringBuilderWrapper sbw, PGPSignatureSubpacketVector vector) throws PGPException {
+    private static void appendSubpacketVector(PrintWriterWrapper pww, PGPSignatureSubpacketVector vector) throws PGPException {
         PGPSignatureList embeddedSignatures = vector.getEmbeddedSignatures();
         int embeddedSigCount = 0;
 
@@ -303,36 +394,36 @@ public class StreamDumper {
             switch (org.pgpainless.algorithm.SignatureSubpacket.fromCode(subpacket.getType())) {
                 case signatureCreationTime:
                     SignatureCreationTime signatureCreationTime = (SignatureCreationTime) subpacket;
-                    sbw.appendLine("Signature Creation Time: " + DateUtil.formatUTCDate(signatureCreationTime.getTime()) + (signatureCreationTime.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Signature Creation Time: " + DateUtil.formatUTCDate(signatureCreationTime.getTime()) + (signatureCreationTime.isCritical() ? " (critical)" : ""));
                     break;
                 case signatureExpirationTime:
                     SignatureExpirationTime signatureExpirationTime = (SignatureExpirationTime) subpacket;
-                    sbw.appendLine("Signature Expiration Time: " + signatureExpirationTime.getTime() + (signatureExpirationTime.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Signature Expiration Time: " + signatureExpirationTime.getTime() + (signatureExpirationTime.isCritical() ? " (critical)" : ""));
                     break;
                 case exportableCertification:
                     Exportable exportable = (Exportable) subpacket;
-                    sbw.appendLine("Exportable: " + exportable.isExportable() + (exportable.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Exportable: " + exportable.isExportable() + (exportable.isCritical() ? " (critical)" : ""));
                     break;
                 case trustSignature:
                     TrustSignature trustSignature = (TrustSignature) subpacket;
-                    sbw.appendLine("Trust Signature" + (trustSignature.isCritical() ? " (critical)" : "") + ":").iind()
+                    pww.appendLine("Trust Signature" + (trustSignature.isCritical() ? " (critical)" : "") + ":").iind()
                             .appendLine("Depth: " + trustSignature.getDepth())
                             .appendLine("Amount: " + trustSignature.getTrustAmount())
                             .dind();
                     break;
                 case regularExpression:
-                    sbw.appendLine("Regular Expression: " + new String(subpacket.getData()));
+                    pww.appendLine("Regular Expression: " + new String(subpacket.getData()));
                     break;
                 case revocable:
                     Revocable revocable = (Revocable) subpacket;
-                    sbw.appendLine("Revocable: " + revocable.isRevocable() + (revocable.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Revocable: " + revocable.isRevocable() + (revocable.isCritical() ? " (critical)" : ""));
                     break;
                 case keyExpirationTime:
                     KeyExpirationTime keyExpirationTime = (KeyExpirationTime) subpacket;
-                    sbw.appendLine("Key Expiration Time: " + keyExpirationTime.getTime() + (keyExpirationTime.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Key Expiration Time: " + keyExpirationTime.getTime() + (keyExpirationTime.isCritical() ? " (critical)" : ""));
                     break;
                 case placeholder:
-                    sbw.appendLine("Placeholder: " + new String(subpacket.getData()));
+                    pww.appendLine("Placeholder: " + new String(subpacket.getData()));
                     break;
                 case preferredSymmetricAlgorithms:
                     PreferredAlgorithms preferredSymmetricAlgorithms = (PreferredAlgorithms) subpacket;
@@ -341,11 +432,11 @@ public class StreamDumper {
                     for (int i = 0; i < symAlgs.length; i++) {
                         symAlgs[i] = SymmetricKeyAlgorithm.fromId(symAlgIds[i]);
                     }
-                    sbw.appendLine("Preferred Symmetric Algorithms: " + Arrays.toString(symAlgs) + (preferredSymmetricAlgorithms.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Preferred Symmetric Algorithms: " + Arrays.toString(symAlgs) + (preferredSymmetricAlgorithms.isCritical() ? " (critical)" : ""));
                     break;
                 case revocationKey:
                     RevocationKey revocationKey = (RevocationKey) subpacket;
-                    sbw.appendLine("Revocation Key" + (revocationKey.isCritical() ? " (critical)" : "") + ":").iind()
+                    pww.appendLine("Revocation Key" + (revocationKey.isCritical() ? " (critical)" : "") + ":").iind()
                             .appendLine("Key Algorithm: " + PublicKeyAlgorithm.fromId(revocationKey.getAlgorithm()))
                             .appendLine("Signature Class: " + revocationKey.getSignatureClass())
                             .appendLine("Fingerprint: " + new String(revocationKey.getFingerprint()))
@@ -353,11 +444,11 @@ public class StreamDumper {
                     break;
                 case issuerKeyId:
                     IssuerKeyID issuerKeyID = (IssuerKeyID) subpacket;
-                    sbw.appendLine("Issuer Key ID: " + Long.toHexString(issuerKeyID.getKeyID()) + (issuerKeyID.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Issuer Key ID: " + Long.toHexString(issuerKeyID.getKeyID()) + (issuerKeyID.isCritical() ? " (critical)" : ""));
                     break;
                 case notationData:
                     NotationData notationData = (NotationData) subpacket;
-                    sbw.appendLine("Notation Data" + (notationData.isCritical() ? " (critical)" : "") + ":").iind()
+                    pww.appendLine("Notation Data" + (notationData.isCritical() ? " (critical)" : "") + ":").iind()
                             .appendLine("Notation Name: " + notationData.getNotationName())
                             .appendLine("Notation Value: " + notationData.getNotationValue())
                             .dind();
@@ -369,7 +460,7 @@ public class StreamDumper {
                     for (int i = 0; i < hashAlgs.length; i++) {
                         hashAlgs[i] = HashAlgorithm.fromId(hashAlgIds[i]);
                     }
-                    sbw.appendLine("Preferred Hash Algorithms: " + Arrays.toString(hashAlgs) + (preferredHashAlgorithms.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Preferred Hash Algorithms: " + Arrays.toString(hashAlgs) + (preferredHashAlgorithms.isCritical() ? " (critical)" : ""));
                     break;
                 case preferredCompressionAlgorithms:
                     PreferredAlgorithms preferredCompressionAlgorithms = (PreferredAlgorithms) subpacket;
@@ -378,44 +469,44 @@ public class StreamDumper {
                     for (int i = 0; i < compAlgs.length; i++) {
                         compAlgs[i] = CompressionAlgorithm.fromId(compAlgIds[i]);
                     }
-                    sbw.appendLine("Preferred Compression Algorithms: " + Arrays.toString(compAlgs) + (preferredCompressionAlgorithms.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Preferred Compression Algorithms: " + Arrays.toString(compAlgs) + (preferredCompressionAlgorithms.isCritical() ? " (critical)" : ""));
                     break;
                 case keyServerPreferences:
                     KeyServerPreferences preferences = new KeyServerPreferences(subpacket);
-                    sbw.appendLine("Key Server Preferences: " + Arrays.toString(preferences.getPreferences().toArray(new KeyServerPreferences.Pref[0])));
+                    pww.appendLine("Key Server Preferences: " + Arrays.toString(preferences.getPreferences().toArray(new KeyServerPreferences.Pref[0])));
                     break;
                 case preferredKeyServers:
-                    sbw.appendLine("Preferred Key Servers: " + new String(subpacket.getData()));
+                    pww.appendLine("Preferred Key Servers: " + new String(subpacket.getData()));
                     break;
                 case primaryUserId:
                     PrimaryUserID primaryUserID = (PrimaryUserID) subpacket;
-                    sbw.appendLine("Primary User-ID: " + primaryUserID.isPrimaryUserID() + (primaryUserID.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Primary User-ID: " + primaryUserID.isPrimaryUserID() + (primaryUserID.isCritical() ? " (critical)" : ""));
                     break;
                 case policyUrl:
-                    sbw.appendLine("Policy-URL: " + new String(subpacket.getData()));
+                    pww.appendLine("Policy-URL: " + new String(subpacket.getData()));
                     break;
                 case keyFlags:
                     KeyFlags keyFlags = (KeyFlags) subpacket;
                     KeyFlag[] flags = KeyFlag.fromBitmask(keyFlags.getFlags()).toArray(new KeyFlag[0]);
-                    sbw.appendLine("Key Flags: " + Arrays.toString(flags) + (keyFlags.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Key Flags: " + Arrays.toString(flags) + (keyFlags.isCritical() ? " (critical)" : ""));
                     break;
                 case signerUserId:
                     SignerUserID signerUserID = (SignerUserID) subpacket;
-                    sbw.appendLine("Signer User-ID: " + signerUserID.getID() + (signerUserID.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Signer User-ID: " + signerUserID.getID() + (signerUserID.isCritical() ? " (critical)" : ""));
                     break;
                 case revocationReason:
                     RevocationReason revocationReason = (RevocationReason) subpacket;
-                    sbw.appendLine("Revocation Reason: " + RevocationAttributes.Reason.fromCode(revocationReason.getRevocationReason()) + (revocationReason.isCritical() ? " (critical)" : "")).iind()
+                    pww.appendLine("Revocation Reason: " + RevocationAttributes.Reason.fromCode(revocationReason.getRevocationReason()) + (revocationReason.isCritical() ? " (critical)" : "")).iind()
                             .appendLine("Description: " + revocationReason.getRevocationDescription()).dind();
                     break;
                 case features:
                     Features features = (Features) subpacket;
                     Feature[] featurez = Feature.fromBitmask(features.getFeatures()).toArray(new Feature[0]);
-                    sbw.appendLine("Features: " + Arrays.toString(featurez) + (features.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Features: " + Arrays.toString(featurez) + (features.isCritical() ? " (critical)" : ""));
                     break;
                 case signatureTarget:
                     SignatureTarget signatureTarget = (SignatureTarget) subpacket;
-                    sbw.appendLine("Signature Target" + (signatureTarget.isCritical() ? " (critical)" : "" + ":")).iind()
+                    pww.appendLine("Signature Target" + (signatureTarget.isCritical() ? " (critical)" : "" + ":")).iind()
                             .appendLine("Public Key Algorithm: " + PublicKeyAlgorithm.fromId(signatureTarget.getPublicKeyAlgorithm()))
                             .appendLine("Hash Algorithm: " + HashAlgorithm.fromId(signatureTarget.getHashAlgorithm()))
                             .appendLine("Hash Data: " + Hex.toHexString(signatureTarget.getHashData()))
@@ -423,74 +514,76 @@ public class StreamDumper {
                     break;
                 case embeddedSignature:
                     EmbeddedSignature embeddedSignature = (EmbeddedSignature) subpacket;
-                    sbw.appendLine("Embedded Signature" + (embeddedSignature.isCritical() ? " (critical)" : "") + ":").iind();
-                    appendSignature(sbw, embeddedSignatures.get(embeddedSigCount++));
+                    pww.appendLine("Embedded Signature" + (embeddedSignature.isCritical() ? " (critical)" : "") + ":").iind();
+                    appendSignature(pww, embeddedSignatures.get(embeddedSigCount++));
                     break;
                 case issuerFingerprint:
                     IssuerFingerprint issuerFingerprint = (IssuerFingerprint) subpacket;
-                    sbw.appendLine("Issuer Fingerprint: " + Hex.toHexString(issuerFingerprint.getFingerprint()) + (issuerFingerprint.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Issuer Fingerprint: " + Hex.toHexString(issuerFingerprint.getFingerprint()) + (issuerFingerprint.isCritical() ? " (critical)" : ""));
                     break;
                 case preferredAEADAlgorithms:
                     PreferredAlgorithms preferredAEADAlgorithms = (PreferredAlgorithms) subpacket;
                     int[] aeadAlgIds = preferredAEADAlgorithms.getPreferences();
-                    sbw.appendLine("Preferred AEAD Algorithms: " + Arrays.toString(aeadAlgIds) + (preferredAEADAlgorithms.isCritical() ? " (critical)" : ""));
+                    pww.appendLine("Preferred AEAD Algorithms: " + Arrays.toString(aeadAlgIds) + (preferredAEADAlgorithms.isCritical() ? " (critical)" : ""));
                     break;
                 case intendedRecipientFingerprint:
                     IntendedRecipientFingerprint intendedRecipientFingerprint = (IntendedRecipientFingerprint) subpacket;
-                    sbw.appendLine("Intended Recipient Fingerprint" + (intendedRecipientFingerprint.isCritical() ? " critical" : "") + ":").iind()
+                    pww.appendLine("Intended Recipient Fingerprint" + (intendedRecipientFingerprint.isCritical() ? " critical" : "") + ":").iind()
                             .appendLine("Key Version: " + intendedRecipientFingerprint.getKeyVersion())
                             .appendLine("Fingerprint: " + Hex.toHexString(intendedRecipientFingerprint.getFingerprint()))
                             .dind();
                     break;
                 case attestedCertification:
-                    sbw.appendLine("Attested Certification: " + new String(subpacket.getData()));
+                    pww.appendLine("Attested Certification: " + new String(subpacket.getData()));
                     break;
                 default:
-                    sbw.appendLine("Experimental Subpacket (Tag " + subpacket.getType() + ")" + (subpacket.isCritical() ? " (critical)" : "") + ":" + new String(subpacket.getData()));
+                    int type = subpacket.getType();
+                    if (type >= 60 && type <= 63) {
+                        pww.appendLine("Experimental Subpacket (Tag " + type + ")" + (subpacket.isCritical() ? " (critical)" : "") + ":" + new String(subpacket.getData()));
+                    } else {
+                        pww.appendLine("Unknown Subpacket (Tag " + type + ")" + (subpacket.isCritical() ? " (critical)" : "") + ":" + new String(subpacket.getData()));
+                    }
             }
         }
     }
 
-    public static class StringBuilderWrapper {
+    public static class PrintWriterWrapper {
         private final int spacesPerLevel = 2;
 
-        private final StringBuilder sb;
+        private final PrintWriter pw;
         private int indentationLevel = 0;
 
-        public StringBuilderWrapper(StringBuilder sb) {
-            this.sb = sb;
+        public PrintWriterWrapper(PrintWriter pw) {
+            this.pw = pw;
         }
 
-        public StringBuilderWrapper appendLine(String line) {
+        public PrintWriterWrapper appendLine(String line) {
             spaces();
-            sb.append(line).append('\n');
+            pw.write(line);
+            pw.write('\n');
             return this;
         }
 
-        public StringBuilderWrapper iind() {
+        public PrintWriterWrapper iind() {
             indentationLevel++;
             return this;
         }
 
-        public StringBuilderWrapper dind() {
+        public PrintWriterWrapper dind() {
             indentationLevel--;
             return this;
         }
 
-        public StringBuilderWrapper emptyLine() {
-            sb.append('\n');
+        public PrintWriterWrapper emptyLine() {
+            pw.write('\n');
             return this;
         }
 
-        private StringBuilderWrapper spaces() {
+        private PrintWriterWrapper spaces() {
             for (int i = 0; i < indentationLevel * spacesPerLevel; i++) {
-                sb.append(' ');
+                pw.write(' ');
             }
             return this;
-        }
-
-        public String toString() {
-            return sb.toString();
         }
     }
 }

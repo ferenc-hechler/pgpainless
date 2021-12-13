@@ -1,22 +1,36 @@
+// SPDX-FileCopyrightText: 2021 Paul Schaub <vanitasvitae@fsfe.org>
+//
+// SPDX-License-Identifier: Apache-2.0
+
 package org.pgpainless.util;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+import java.io.InputStream;
+import java.nio.charset.Charset;
 
 import org.bouncycastle.bcpg.ArmoredInputStream;
 import org.bouncycastle.openpgp.PGPException;
 import org.bouncycastle.openpgp.PGPSessionKey;
-import org.bouncycastle.util.encoders.Hex;
 import org.junit.jupiter.api.Test;
-import org.pgpainless.algorithm.SymmetricKeyAlgorithm;
 
 public class StreamDumpTest {
 
-    @Test
-    public void test() throws IOException, PGPException {
+    private static InputStream stringToStream(String string) throws IOException {
+        return new ArmoredInputStream(new ByteArrayInputStream(string.getBytes(Charset.forName("UTF8"))));
+    }
 
-        String secretKey = "-----BEGIN PGP PRIVATE KEY BLOCK-----\n" +
+    private static void printDataName(String name) {
+        // CHECKSTYLE:OFF
+        System.out.println("##############################################");
+        System.out.println(name);
+        System.out.println("##############################################");
+        // CHECKSTYLE:ON
+    }
+
+    @Test
+    public void dumpSecretKey() throws IOException, PGPException {
+        String data = "-----BEGIN PGP PRIVATE KEY BLOCK-----\n" +
                 "\n" +
                 "lFgEWx6DORYJKwYBBAHaRw8BAQdABJa6xH6/nQoBQtVuqaenNLrKvkJ5gniGtBH3\n" +
                 "tsK+ckkAAP9uxXBqYoH/Kh+rjNMKRO6pgdkoYTYvMh5TVcQHR6LzoA+ttCxFbW1l\n" +
@@ -34,7 +48,14 @@ public class StreamDumpTest {
                 "=HYsE\n" +
                 "-----END PGP PRIVATE KEY BLOCK-----\n";
 
-        String encryptedMessage = "-----BEGIN PGP MESSAGE-----\n" +
+        printDataName("Secret Key");
+        InputStream inputStream = stringToStream(data);
+        StreamDumper.dump(inputStream, null, System.out);
+    }
+
+    @Test
+    public void dumpEncryptedMessage() throws IOException, PGPException {
+        String data = "-----BEGIN PGP MESSAGE-----\n" +
                 "\n" +
                 "wV4Di9iOlMDSAzMSAQdAu/2VmD0uZASFHqAD0IVNq7C8rdsJ+ZQd2nQsuBilygUw\n" +
                 "9bK+bOzU6ksTZgKgdAjO8zpvM+N0B3L0TtiwLr5rj0rPkCyVLdACnBpWOCZCMpsK\n" +
@@ -42,9 +63,74 @@ public class StreamDumpTest {
                 "r66Eaq8vCTmJpcsy0BYTiQ==\n" +
                 "=FY/Q\n" +
                 "-----END PGP MESSAGE-----\n";
-        PGPSessionKey sessionKey = new PGPSessionKey(SymmetricKeyAlgorithm.AES_256.getAlgorithmId(), Hex.decode("920B1779565C8DF4DD9DB46966CDF2B51BC882C241DE8EF437CADEC711E7EB04"));
 
-        String signedMessage = "-----BEGIN PGP MESSAGE-----\n" +
+        printDataName("Encrypted Message");
+        InputStream inputStream = stringToStream(data);
+        StreamDumper.dump(inputStream, null, System.out);
+    }
+
+    @Test
+    public void dumpEncryptedMessage_withSessionKey() throws PGPException, IOException {
+        String data = "-----BEGIN PGP MESSAGE-----\n" +
+                "\n" +
+                "wV4Di9iOlMDSAzMSAQdAu/2VmD0uZASFHqAD0IVNq7C8rdsJ+ZQd2nQsuBilygUw\n" +
+                "9bK+bOzU6ksTZgKgdAjO8zpvM+N0B3L0TtiwLr5rj0rPkCyVLdACnBpWOCZCMpsK\n" +
+                "0j4B4um24+oCDHtxRu1e1IvsboBtGN9ElxidGAiUdPJ3L0QrNVgzdmVTwuywtIHW\n" +
+                "r66Eaq8vCTmJpcsy0BYTiQ==\n" +
+                "=FY/Q\n" +
+                "-----END PGP MESSAGE-----\n";
+        PGPSessionKey sessionKey = PGPSessionKey
+                .fromAsciiRepresentation("9:920B1779565C8DF4DD9DB46966CDF2B51BC882C241DE8EF437CADEC711E7EB04");
+
+        printDataName("Encrypted Message (with Session Key)");
+        InputStream inputStream = stringToStream(data);
+        StreamDumper.dump(inputStream, sessionKey, System.out);
+    }
+
+    @Test
+    public void dumpEncryptedMessage_withWrongSessionKey() throws PGPException, IOException {
+        String data = "-----BEGIN PGP MESSAGE-----\n" +
+                "\n" +
+                "wV4Di9iOlMDSAzMSAQdAu/2VmD0uZASFHqAD0IVNq7C8rdsJ+ZQd2nQsuBilygUw\n" +
+                "9bK+bOzU6ksTZgKgdAjO8zpvM+N0B3L0TtiwLr5rj0rPkCyVLdACnBpWOCZCMpsK\n" +
+                "0j4B4um24+oCDHtxRu1e1IvsboBtGN9ElxidGAiUdPJ3L0QrNVgzdmVTwuywtIHW\n" +
+                "r66Eaq8vCTmJpcsy0BYTiQ==\n" +
+                "=FY/Q\n" +
+                "-----END PGP MESSAGE-----\n";
+        PGPSessionKey sessionKey = PGPSessionKey
+                .fromAsciiRepresentation("9:920B1779565C8DF4DD9DB46966CDF2B51BC882C241DE8EF437CADEC711E7EBFF");
+
+        printDataName("Encrypted Message (with Wrong Session Key)");
+        InputStream inputStream = stringToStream(data);
+        StreamDumper.dump(inputStream, sessionKey, System.out);
+    }
+
+    @Test
+    public void dumpEncryptedMessageForTwoRecipients() throws PGPException, IOException {
+        String data = "-----BEGIN PGP MESSAGE-----\n" +
+                "\n" +
+                "wV4Di9iOlMDSAzMSAQdAALX6636VfMV+kljW5l6AfcRtnp9RpCO7GG/UrMhpKCgw\n" +
+                "sx1mBvZsfw6y0MUJgNoOHjAlFhxl7SgjH+hVxCs1EjV+BiFm5XcH0Sz3x0AmT4Ev\n" +
+                "wcBMA0niEYFmySYyAQf/a3QjVA5qxQhD/22JGkvt0EsnOebIEKoA4IqUm0bHOfzH\n" +
+                "yiolVp2e8TDGTGDfuPGZe7kWACN5xMshoinSOw5vlGl0OYQt5kqO9ihk8SUtFz/n\n" +
+                "zpjP4R8g5XfHQ6A8aTm7XzjcYiImYJcanvqsPz1oVbXUFjgjWP+IdbGEH2+oahrO\n" +
+                "TYTkaIIFSPENjhwhELA5J6whdYIGPAd4Flqa885Bwq7/mJtizGSUqfMm/vy9Ynyv\n" +
+                "PM9gO44U6f5WNJjVORAAvGRs+yNoDemOR+Tk5lhq69gUysRbTDFKvalAnIg+jDCs\n" +
+                "gov/OsSifJfMJpfkp6B/eq1g3VUxXfXMH9JlpUI1r9I+Ac9cg2nmvMJEYndoeinS\n" +
+                "pXaFOPETcoKe502lXn5nb03sGMBD8jRXd1RiFvvB3emqIczBe1r4a7ntVfDp5Hs=\n" +
+                "=QCSD\n" +
+                "-----END PGP MESSAGE-----\n";
+        PGPSessionKey sessionKey = PGPSessionKey
+                .fromAsciiRepresentation("9:092F816748B2C6FCA49130E931F9DDCF46E4106CE3C4A8437AB660E0C6FED0A1");
+
+        printDataName("Encrypted Message for Two Recipients");
+        InputStream inputStream = stringToStream(data);
+        StreamDumper.dump(inputStream, sessionKey, System.out);
+    }
+
+    @Test
+    public void dumpSignedMessage() throws PGPException, IOException {
+        String data = "-----BEGIN PGP MESSAGE-----\n" +
                 "\n" +
                 "xA0DAAgB0D9vhlIm/osBxA0DAAoWCTXiD9yZ2YYByxRiAAAAAABIZWxsbywgd29y\n" +
                 "bGQhCsJ1BAAWCgAnBYJcdpUyFiEEjeZMrRdY/BlFYM9ZCTXiD9yZ2YYJEAk14g/c\n" +
@@ -60,7 +146,14 @@ public class StreamDumpTest {
                 "=BDwS\n" +
                 "-----END PGP MESSAGE-----\n";
 
-        String compressedSignedMessage = "-----BEGIN PGP MESSAGE-----\n" +
+        printDataName("Signed Message");
+        InputStream inputStream = stringToStream(data);
+        StreamDumper.dump(inputStream, null, System.out);
+    }
+
+    @Test
+    public void dumpSignedCompressedMessage() throws PGPException, IOException {
+        String data = "-----BEGIN PGP MESSAGE-----\n" +
                 "\n" +
                 "owGbwMvMwCH2sPOSUOzzWymMp0WSGGK6InU9UnNy8nUUyvOLclIUuTpKWRjEOBhk\n" +
                 "xRRZ8jZHv1c9Zfp0SurkSJguViaQFgYuTgGYSJ09w/8M9xn6J9em8Bvs3rHgYd+G\n" +
@@ -69,8 +162,8 @@ public class StreamDumpTest {
                 "=56Gw\n" +
                 "-----END PGP MESSAGE-----";
 
-        ArmoredInputStream inputStream = new ArmoredInputStream(new ByteArrayInputStream(secretKey.getBytes(StandardCharsets.UTF_8)));
-
-        StreamDumper.dump(inputStream, sessionKey);
+        printDataName("Signed Compressed Data");
+        InputStream inputStream = stringToStream(data);
+        StreamDumper.dump(inputStream, null, System.out);
     }
 }
