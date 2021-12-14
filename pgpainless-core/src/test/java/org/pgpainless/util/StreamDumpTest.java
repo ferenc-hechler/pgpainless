@@ -17,7 +17,11 @@ import org.junit.jupiter.api.Test;
 public class StreamDumpTest {
 
     private static InputStream stringToStream(String string) throws IOException {
-        return new ArmoredInputStream(new ByteArrayInputStream(string.getBytes(Charset.forName("UTF8"))));
+        return new ArmoredInputStream(
+                new ByteArrayInputStream(
+                        string.getBytes(Charset.forName("UTF8"))
+                )
+        );
     }
 
     private static void printDataName(String name) {
